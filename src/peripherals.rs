@@ -4,6 +4,12 @@ use crate::can;
 use crate::gpio;
 #[cfg(not(feature = "riscv-ulp-hal"))]
 use crate::i2c;
+#[cfg(all(
+    any(esp32, esp32s2),
+    esp_idf_version_major = "4",
+    not(feature = "riscv-ulp-hal")
+))]
+use crate::i2s;
 #[cfg(not(feature = "riscv-ulp-hal"))]
 use crate::ledc;
 #[cfg(all(
@@ -40,8 +46,6 @@ use crate::uart;
     esp_idf_comp_ulp_enabled
 ))]
 use crate::ulp;
-#[cfg(not(feature = "riscv-ulp-hal"))]
-use crate::i2s;
 
 pub struct Peripherals {
     pub pins: gpio::Pins,
@@ -137,9 +141,18 @@ pub struct Peripherals {
         )
     ))]
     pub twdt: watchdog::TWDT,
-    #[cfg(not(feature = "riscv-ulp-hal"))]
+    #[cfg(all(
+        any(esp32, esp32s2),
+        esp_idf_version_major = "4",
+        not(feature = "riscv-ulp-hal")
+    ))]
     pub i2s0: i2s::I2S0,
-    #[cfg(not(feature = "riscv-ulp-hal"))]
+    #[cfg(all(
+        any(esp32, esp32s2),
+        esp_idf_version_major = "4",
+        not(feature = "riscv-ulp-hal"),
+        any(esp32, esp32s3) // These have an I2S1
+    ))]
     pub i2s1: i2s::I2S1,
 }
 
@@ -278,9 +291,18 @@ impl Peripherals {
                 )
             ))]
             twdt: watchdog::TWDT::new(),
-            #[cfg(not(feature = "riscv-ulp-hal"))]
+            #[cfg(all(
+                any(esp32, esp32s2),
+                esp_idf_version_major = "4",
+                not(feature = "riscv-ulp-hal")
+            ))]
             i2s0: i2s::I2S0::new(),
-            #[cfg(not(feature = "riscv-ulp-hal"))]
+            #[cfg(all(
+                any(esp32, esp32s2),
+                esp_idf_version_major = "4",
+                not(feature = "riscv-ulp-hal"),
+                any(esp32, esp32s3) // These have an I2S1
+            ))]
             i2s1: i2s::I2S1::new(),
         }
     }

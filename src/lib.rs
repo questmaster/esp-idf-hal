@@ -40,6 +40,12 @@ pub mod gpio;
 pub mod hall;
 #[cfg(not(feature = "riscv-ulp-hal"))]
 pub mod i2c;
+#[cfg(all(
+    any(esp32, esp32s2),
+    esp_idf_version_major = "4",
+    not(feature = "riscv-ulp-hal")
+))]
+pub mod i2s;
 #[cfg(not(feature = "riscv-ulp-hal"))]
 pub mod interrupt;
 #[cfg(not(feature = "riscv-ulp-hal"))]
@@ -74,8 +80,6 @@ pub mod uart;
 ))]
 pub mod ulp;
 pub mod units;
-#[cfg(not(feature = "riscv-ulp-hal"))]
-pub mod i2s;
 
 #[cfg(feature = "riscv-ulp-hal")]
 pub use crate::riscv_ulp_hal::delay;
