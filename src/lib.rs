@@ -74,6 +74,8 @@ pub mod uart;
 ))]
 pub mod ulp;
 pub mod units;
+#[cfg(not(feature = "riscv-ulp-hal"))]
+pub mod i2s;
 
 #[cfg(feature = "riscv-ulp-hal")]
 pub use crate::riscv_ulp_hal::delay;

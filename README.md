@@ -1,3 +1,7 @@
+This fork is used to implement the I2S peripheral in camera slave mode support.
+
+------
+
 # An [embedded-hal](https://github.com/rust-embedded/embedded-hal) implementation for ESP32[-XX] + ESP-IDF
 
 [![CI](https://github.com/esp-rs/esp-idf-hal/actions/workflows/ci.yml/badge.svg)](https://github.com/esp-rs/esp-idf-hal/actions/workflows/ci.yml)

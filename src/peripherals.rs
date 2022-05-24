@@ -40,6 +40,8 @@ use crate::uart;
     esp_idf_comp_ulp_enabled
 ))]
 use crate::ulp;
+#[cfg(not(feature = "riscv-ulp-hal"))]
+use crate::i2s;
 
 pub struct Peripherals {
     pub pins: gpio::Pins,
@@ -135,6 +137,10 @@ pub struct Peripherals {
         )
     ))]
     pub twdt: watchdog::TWDT,
+    #[cfg(not(feature = "riscv-ulp-hal"))]
+    pub i2s0: i2s::I2S0,
+    #[cfg(not(feature = "riscv-ulp-hal"))]
+    pub i2s1: i2s::I2S1,
 }
 
 #[cfg(feature = "riscv-ulp-hal")]
@@ -272,6 +278,10 @@ impl Peripherals {
                 )
             ))]
             twdt: watchdog::TWDT::new(),
+            #[cfg(not(feature = "riscv-ulp-hal"))]
+            i2s0: i2s::I2S0::new(),
+            #[cfg(not(feature = "riscv-ulp-hal"))]
+            i2s1: i2s::I2S1::new(),
         }
     }
 }
