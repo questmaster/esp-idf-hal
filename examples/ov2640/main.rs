@@ -1,8 +1,3 @@
-//use embedded_hal::blocking::delay::DelayMs;
-//use embedded_hal::digital::v2::OutputPin;
-//use embedded_hal::prelude::_embedded_hal_blocking_i2c_Write;
-//use embedded_hal::prelude::_embedded_hal_blocking_i2c_WriteRead;
-
 use esp_idf_hal::delay;
 use esp_idf_hal::delay::Ets;
 use esp_idf_hal::gpio;
@@ -34,7 +29,7 @@ pub fn setup(
     sd5: gpio::AnyInputPin,
     sd6: gpio::AnyInputPin,
     sd7: gpio::AnyInputPin,
-) -> Result<(), EspError> {
+) -> Result<i2s::CameraDriver<'static>, EspError> {
     println!("Configuring LEDC output channel");
 
     let ledc_timer_config = config::TimerConfig::new()
@@ -95,7 +90,8 @@ pub fn setup(
     // I2S init
     let mut cam_slave = i2s::CameraDriver::new(
         i2s, vsync, href, pclk, sd0, sd1, sd2, sd3, sd4, sd5, sd6, sd7,
-    );
+    )
+    .unwrap();
 
     //// ll_cam_config
     // reset
@@ -128,7 +124,7 @@ pub fn setup(
         println!("===================================================");
     }
 
-    Ok(())
+    Ok(cam_slave)
 }
 
 fn main() -> Result<(), u8> {
@@ -163,7 +159,7 @@ fn main() -> Result<(), u8> {
     let sd6 = pins.gpio36;
     let sd7 = pins.gpio39;
 
-    setup(
+    let cam_slave = setup(
         sda.into(),
         scl.into(),
         i2c,
@@ -229,6 +225,15 @@ fn main() -> Result<(), u8> {
 
     */
     println!("After OV2640 connect");
+
+    cam_slave.config(i2s::FrameSize::FramesizeVga, 0x26);
+    println!("OV2640 started...");
+
+    cam_slave.start(0);
+    println!("OV2640 started...");
+
+    cam_slave.stop();
+    println!("OV2640 stopped...");
 
     loop {} // halt system intentionally
 
