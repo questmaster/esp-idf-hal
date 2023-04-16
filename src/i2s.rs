@@ -9,13 +9,13 @@
 //! - LCD TX mode
 //!
 
-use crate::gpio::*;
+use crate::gpio::InputPin;
 use crate::peripheral::Peripheral;
 use core::convert::TryInto;
+use core::ffi::c_void;
 use core::marker::PhantomData;
 use esp_idf_sys::i2s_port_t;
 use esp_idf_sys::*;
-use std::os::raw::c_void;
 
 crate::embedded_hal_error!(
     I2sError,
@@ -93,6 +93,12 @@ pub mod regs {
         I2S_OUT_LINK_REG,
         I2S_IN_LINK_REG,
         // ... more
+
+        /* Interrupt registers */
+        I2S_INT_RAW_REG,
+        I2S_INT_ST_REG,
+        I2S_INT_ENA_REG,
+        I2S_INT_CLR_REG,
     }
 
     /// The Register struct allows access to low level registers for I2S configuration.
@@ -107,11 +113,12 @@ pub mod regs {
         }
 
         /// Get requested registers address for given I2S port.
+        #[cfg(esp32)]
         const fn reg_address(port: &i2s_port_t, reg: &I2sRegisterBank) -> u32 {
             #[allow(non_snake_case)]
             let mut address = match *port {
                 esp_idf_sys::i2s_port_t_I2S_NUM_0 => 0x3FF4_F000,
-                #[cfg(I2S1_enabled)]
+                #[cfg(any(esp32, esp32s2))]
                 esp_idf_sys::i2s_port_t_I2S_NUM_1 => 0x3FF6_D000,
                 _ => unreachable!(),
             };
@@ -136,12 +143,20 @@ pub mod regs {
                 I2sRegisterBank::I2S_OUT_LINK_REG => 0x30,
                 I2sRegisterBank::I2S_IN_LINK_REG => 0x34,
                 // ... more
+                I2sRegisterBank::I2S_INT_RAW_REG => 0x0C,
+                I2sRegisterBank::I2S_INT_ST_REG => 0x10,
+                I2sRegisterBank::I2S_INT_ENA_REG => 0x14,
+                I2sRegisterBank::I2S_INT_CLR_REG => 0x18,
             };
             if address % 4 != 0 {
                 panic!("Non-aligned register address for I2S peripheral.")
             }
 
             address
+        }
+        #[cfg(not(esp32))]
+        const fn reg_address(_port: &i2s_port_t, _reg: &I2sRegisterBank) -> u32 {
+            panic!("Register address calculation not implemented.");
         }
 
         /// Read full register value.
@@ -202,37 +217,27 @@ struct DmaElement {
 //    value: u32,
 //}
 
-pub enum FrameSize {
-    Framesize96x96,   // 96x96
-    FramesizeQqvga,   // 160x120
-    FramesizeQcif,    // 176x144
-    FramesizeHqvga,   // 240x176
-    Framesize240x240, // 240x240
-    FramesizeQvga,    // 320x240
-    FramesizeCif,     // 400x296
-    FramesizeHvga,    // 480x320
-    FramesizeVga,     // 640x480
-    FramesizeSvga,    // 800x600
-    FramesizeXga,     // 1024x768
-    FramesizeHd,      // 1280x720
-    FramesizeSxga,    // 1280x1024
-    FramesizeUxga,    // 1600x1200
-    // 3MP Sensors
-    FramesizeFhd,  // 1920x1080
-    FramesizePHd,  //  720x1280
-    FramesizeP3mp, //  864x1536
-    FramesizeQxga, // 2048x1536
-    // 5MP Sensors
-    FramesizeQhd,   // 2560x1440
-    FramesizeWqxga, // 2560x1600
-    FramesizePFhd,  // 1080x1920
-    FramesizeQsxga, // 2560x1920
-    FramesizeInvalid,
+#[allow(non_camel_case_types)]
+#[derive(Copy, Clone, Debug)]
+pub enum SamplingMode {
+    /* camera sends byte sequence: s1, s2, s3, s4, ...
+     * fifo receives: 00 s1 00 s2, 00 s2 00 s3, 00 s3 00 s4, ...
+     */
+    SM_0A0B_0B0C = 0,
+    /* camera sends byte sequence: s1, s2, s3, s4, ...
+     * fifo receives: 00 s1 00 s2, 00 s3 00 s4, ...
+     */
+    SM_0A0B_0C0D = 1,
+    /* camera sends byte sequence: s1, s2, s3, s4, ...
+     * fifo receives: 00 s1 00 00, 00 s2 00 00, 00 s3 00 00, ...
+     */
+    SM_0A00_0B00 = 3,
 }
 
 /// I2S camera slave abstraction
 pub struct CameraDriver<'d> {
     i2s: i2s_port_t,
+    sampling_mode: SamplingMode,
 
     // uint32_t dma_bytes_per_item;
     // uint32_t dma_buffer_size;
@@ -243,41 +248,15 @@ pub struct CameraDriver<'d> {
     // uint32_t frame_copy_cnt;
     //
     // //for JPEG mode
-    _dma: Vec<lldesc_t>,
+    _dma: &'d [lldesc_t], //Vec<lldesc_t>,
     // uint8_t  *dma_buffer;
     //
-    // cam_frame_t *frames;
-    //
-    // QueueHandle_t event_queue;
-    // QueueHandle_t frame_buffer_queue;
-    // TaskHandle_t task_handle;
     // intr_handle_t cam_intr_handle;
     //
-    // uint8_t dma_num;//ESP32-S3
-    // intr_handle_t dma_intr_handle;//ESP32-S3
-    //
-    // uint8_t jpeg_mode;
     vsync_pin: i32, // was uin8_t
     vsync_invert: bool,
-    // uint32_t frame_cnt;
-    // uint32_t recv_size;
+
     _swap_data: bool,
-    // bool psram_mode;
-    //
-    // //for RGB/YUV modes
-    // uint16_t width;
-    // uint16_t height;
-    // #if CONFIG_CAMERA_CONVERTER_ENABLED
-    // float in_bytes_per_pixel;
-    // float fb_bytes_per_pixel;
-    // camera_conv_mode_t conv_mode;
-    // #else
-    // uint8_t in_bytes_per_pixel;
-    // uint8_t fb_bytes_per_pixel;
-    // #endif
-    // uint32_t fb_size;
-    //
-    // cam_state_t state;
 
     //config: config::Config,
     _p: PhantomData<&'d mut ()>,
@@ -289,6 +268,7 @@ impl<'d> CameraDriver<'d> {
     ///
     /// This ia an initial set of vars.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(any(esp32, esp32s2))]
     pub fn new(
         _i2s: impl Peripheral<P = I2S0> + 'd,
         vsync: impl Peripheral<P = impl InputPin> + 'd,
@@ -308,8 +288,9 @@ impl<'d> CameraDriver<'d> {
         crate::into_ref!(pclk, vsync, href, sd0, sd1, sd2, sd3, sd4, sd5, sd6, sd7);
         let result = Self {
             i2s: <I2S0 as I2s>::port() as _,
+            sampling_mode: SamplingMode::SM_0A00_0B00,
             dma_half_buffer_size: 0,
-            _dma: Vec::with_capacity(0),
+            _dma: Default::default(), //Vec::with_capacity(0),
             vsync_pin: vsync.pin(),
             vsync_invert: true,
             _swap_data: false,
@@ -339,7 +320,7 @@ impl<'d> CameraDriver<'d> {
             gpio_isr_handler_add(
                 vsync.pin(),
                 Some(Self::cam_vsync_isr),
-                /*0 as *mut c_void*/ std::ptr::null_mut::<c_void>(),
+                /*0 as *mut c_void*/ core::ptr::null_mut::<c_void>(),
             ); // todo: correct parameter
             gpio_intr_disable(vsync.pin())
         })?;
@@ -369,22 +350,33 @@ impl<'d> CameraDriver<'d> {
         let reg_conf = regs::Register::new(port, regs::I2sRegisterBank::I2S_CONF_REG);
         let reg_conf_chan = regs::Register::new(port, regs::I2sRegisterBank::I2S_CONF_CHAN_REG);
         let reg_fifo_conf = regs::Register::new(port, regs::I2sRegisterBank::I2S_FIFO_CONF_REG);
+        let reg_lc_conf = regs::Register::new(port, regs::I2sRegisterBank::I2S_LC_CONF_REG);
 
+        reg_conf.set_bits(0x0000_0002); //I2S0.conf.rx_reset = 1;
+        reg_conf.unset_bits(0x0000_0002); //I2S0.conf.rx_reset = 0;
+        reg_conf.set_bits(0x0000_0008); //I2S0.conf.rx_fifo_reset = 1;
+        reg_conf.unset_bits(0x0000_0008); //I2S0.conf.rx_fifo_reset = 0;
+        reg_lc_conf.set_bits(0x0000_0001); //I2S0.lc_conf.in_rst = 1;
+        reg_lc_conf.unset_bits(0x0000_0001); //I2S0.lc_conf.in_rst = 0;
+        reg_lc_conf.set_bits(0x0000_0004); //I2S0.lc_conf.ahbm_fifo_rst = 1;
+        reg_lc_conf.unset_bits(0x0000_0004); //I2S0.lc_conf.ahbm_fifo_rst = 0;
+        reg_lc_conf.set_bits(0x0000_0008); //I2S0.lc_conf.ahbm_rst = 1;
+        reg_lc_conf.unset_bits(0x0000_0008); //I2S0.lc_conf.ahbm_rst = 0;
+
+        // todo: ll_cam_config NOT complete; some configs missing here, please review
         reg_conf2.write(0x0000_0021); // Reset & I2S_LCD_EN & I2S_CAMERA_EN
         reg_conf.write(0x0000_F040); // Reset & I2S_RX_SLAVE_MOD & !I2S_RX_MSB_RIGHT & !I2S_RX_RIGHT_FIRST
         reg_conf_chan.write(0x0000_0008); // Reset & I2S_RX_CHAN_MOD[2:0]=1
-        reg_fifo_conf.write(0x0001_1820); // Reset & I2S_RX_FIFO_MOD[2:0]=1
+        reg_fifo_conf.write(0x0010_1820 & ((result.sampling_mode as u32) << 16)); // Reset & I2S_RX_FIFO_MOD[2:0]=SamplingMode & I2S_RX_FIFO_MOD_FORCE_EN=1
 
         /* other default reg values missing/not implemented here */
 
         Ok(result)
     }
 
-    pub fn config(&self, _frame_size: FrameSize, _sensor_pid: u16) -> Result<(), EspError> {
-        // Todo: missing impl of cam_config in cam_hal.c; start() needs this to be done before exec!
-        unimplemented!()
-    }
-
+    ///
+    /// Enables I2S0 as camera slave and enables ISRs and DMA.
+    ///
     pub fn start(&self, _frame_pos: usize) -> bool {
         let port = self.i2s;
 
@@ -395,7 +387,7 @@ impl<'d> CameraDriver<'d> {
 
         reg_conf.unset_bits(0x0000_0020); //I2S0.conf.rx_start = 0;
 
-        //unsafe {}; // todo: I2S_ISR_ENABLE(in_suc_eof);
+        self.insuceof_interrupt_enable(true); // I2S_ISR_ENABLE(in_suc_eof);
 
         reg_conf.set_bits(0x0000_0002); //I2S0.conf.rx_reset = 1;
         reg_conf.unset_bits(0x0000_0002); //I2S0.conf.rx_reset = 0;
@@ -409,9 +401,9 @@ impl<'d> CameraDriver<'d> {
         reg_lc_conf.unset_bits(0x0000_0008); //I2S0.lc_conf.ahbm_rst = 0;
 
         // todo: config items and dma buffer needed! -> see fn config()
-        reg_rxeof_num.write(self.dma_half_buffer_size / std::mem::size_of::<DmaElement>() as u32); //I2S0.rx_eof_num = cam->dma_half_buffer_size / sizeof(dma_elem_t);
+        reg_rxeof_num.write(self.dma_half_buffer_size / core::mem::size_of::<DmaElement>() as u32); //I2S0.rx_eof_num = cam->dma_half_buffer_size / sizeof(dma_elem_t);
 
-        // todo:reg_in_link.write_masked(0x000f_ffff, std::ptr::addr_of!(self.dma[0]) as u32); //I2S0.in_link.addr = ((uint32_t)&cam->dma[0]) & 0xfffff;
+        // todo:reg_in_link.write_masked(0x000f_ffff, core::ptr::addr_of!(self.dma[0]) as u32); //I2S0.in_link.addr = ((uint32_t)&cam->dma[0]) & 0xfffff;
 
         reg_in_link.set_bits(0x2000_0000); //I2S0.in_link.start = 1;
 
@@ -420,6 +412,9 @@ impl<'d> CameraDriver<'d> {
         true
     }
 
+    ///
+    /// Disables I2S0 as camera slave and disables ISRs and DMA.
+    ///
     pub fn stop(&self) -> bool {
         let port = <I2S0 as I2s>::port();
 
@@ -428,15 +423,99 @@ impl<'d> CameraDriver<'d> {
 
         reg_conf.unset_bits(0x0000_0020); //I2S0.conf.rx_start = 0;
 
-        //unsafe {}; // todo: I2S_ISR_DISABLE(in_suc_eof);
+        self.insuceof_interrupt_enable(false); // I2S_ISR_DISABLE(in_suc_eof);
         reg_in_link.set_bits(0x1000_0000); // I2S0.in_link.stop = 1;
 
         true
     }
 
+    #[allow(unreachable_code)]
+    pub fn set_sampling_mode(&self, _sampling_mode: SamplingMode) {
+        !unimplemented!()
+    }
+
+    pub fn vsync_interrupt_enable(&self, enable: bool) {
+        match enable {
+            true => unsafe { gpio_intr_enable(self.vsync_pin) },
+            _ => unsafe { gpio_intr_disable(self.vsync_pin) },
+        };
+    }
+
+    fn insuceof_interrupt_enable(&self, enable: bool) {
+        let port = self.i2s;
+        let int_clr = regs::Register::new(port, regs::I2sRegisterBank::I2S_INT_CLR_REG);
+        let int_ena = regs::Register::new(port, regs::I2sRegisterBank::I2S_INT_ENA_REG);
+
+        match enable {
+            true => {
+                int_clr.set_bits(0x0000_0100); // I2S_IN_SUC_EOF_INT
+                int_ena.set_bits(0x0000_0100);
+            }
+            _ => {
+                int_ena.unset_bits(0x0000_0100);
+                int_clr.set_bits(0x0000_0100);
+            }
+        };
+    }
+
     /* --- ISR Handler --- */
 
-    unsafe extern "C" fn cam_vsync_isr(_cam_driver: *mut c_void) {}
+    #[allow(unreachable_code, unused)]
+    unsafe extern "C" fn cam_vsync_isr(_cam_driver: *mut c_void) {
+        // static IRAM_ATTR ?!
+        !unimplemented!()
+        /*
+           //DBG_PIN_SET(1);
+           cam_obj_t *cam = (cam_obj_t *)arg;
+           BaseType_t HPTaskAwoken = pdFALSE;
+           // filter
+           ets_delay_us(1);
+           if (gpio_ll_get_level(&GPIO, cam->vsync_pin) == !cam->vsync_invert) {
+               ll_cam_send_event(cam, CAM_VSYNC_EVENT, &HPTaskAwoken);
+               if (HPTaskAwoken == pdTRUE) {
+                   portYIELD_FROM_ISR();
+               }
+           }
+           //DBG_PIN_SET(0);
+
+        */
+    }
+
+    #[allow(unreachable_code, unused)]
+    unsafe extern "C" fn cam_dma_isr(_cam_driver: *mut c_void) {
+        !unimplemented!()
+        /*
+           //DBG_PIN_SET(1);
+           cam_obj_t *cam = (cam_obj_t *)arg;
+           BaseType_t HPTaskAwoken = pdFALSE;
+
+           typeof(I2S0.int_st) status = I2S0.int_st;
+           if (status.val == 0) {
+               return;
+           }
+
+           I2S0.int_clr.val = status.val;
+
+           if (status.in_suc_eof) {
+               ll_cam_send_event(cam, CAM_IN_SUC_EOF_EVENT, &HPTaskAwoken);
+           }
+           if (HPTaskAwoken == pdTRUE) {
+               portYIELD_FROM_ISR();
+           }
+           //DBG_PIN_SET(0);
+
+        */
+    }
+
+    /* --- non instance functions --- */
+
+    pub fn bytes_per_sample(mode: SamplingMode) -> usize {
+        match mode {
+            SamplingMode::SM_0A00_0B00 => 4,
+            SamplingMode::SM_0A0B_0B0C => 4,
+            SamplingMode::SM_0A0B_0C0D => 2,
+        }
+    }
 
     /* --- DMA --- */
     /* TODO: add dma data transfer */
@@ -476,5 +555,5 @@ macro_rules! impl_i2s {
 }
 
 impl_i2s!(I2S0: esp_idf_sys::i2s_port_t_I2S_NUM_0);
-#[cfg(I2S1_enabled)]
+#[cfg(any(esp32s3, esp32))]
 impl_i2s!(I2S1: esp_idf_sys::i2s_port_t_I2S_NUM_1); // It seems by default ESP_IDF is build with only one I2S enabled.
