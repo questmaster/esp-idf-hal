@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - i2s_cam
   pull_request:
   schedule:
     - cron: "50 4 * * *"
