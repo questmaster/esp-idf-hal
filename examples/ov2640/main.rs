@@ -1,8 +1,5 @@
-use esp_idf_sys::EspError;
-
 #[cfg(all(esp32, esp_idf_version_major = "4"))]
 pub mod camera {
-    use esp_idf_hal::delay;
     use esp_idf_hal::delay::Ets;
     use esp_idf_hal::gpio;
     use esp_idf_hal::i2c;
@@ -173,8 +170,14 @@ pub mod camera {
         println!("Start I2S config");
         //// ll_cam_set_pin
         // I2S init
+        let i2s_config = i2s::config::Config {
+            dma_buffer: Some(&[0_u8; 20]),
+            vsync_invert: false,
+            vsync_isr: None, // Todo: compiles, but will crash due to missing isr!
+            dma_isr: None,
+        };
         let mut cam_slave = i2s::CameraDriver::new(
-            i2s, vsync, href, pclk, sd0, sd1, sd2, sd3, sd4, sd5, sd6, sd7,
+            i2s, vsync, href, pclk, sd0, sd1, sd2, sd3, sd4, sd5, sd6, sd7, i2s_config,
         )
         .unwrap();
 
@@ -215,13 +218,6 @@ pub mod camera {
 
 #[cfg(all(esp32, esp_idf_version_major = "4"))]
 fn run() {
-    use esp_idf_hal::delay;
-    use esp_idf_hal::delay::Ets;
-    use esp_idf_hal::gpio;
-    use esp_idf_hal::i2c;
-    use esp_idf_hal::i2s;
-    use esp_idf_hal::ledc::*;
-    use esp_idf_hal::peripheral::Peripheral;
     use esp_idf_hal::prelude::*;
 
     #[allow(unused)]

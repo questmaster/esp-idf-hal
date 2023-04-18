@@ -11,10 +11,8 @@
 
 use crate::gpio::InputPin;
 use crate::peripheral::Peripheral;
-use core::convert::TryInto;
 use core::ffi::c_void;
 use core::marker::PhantomData;
-use esp_idf_sys::i2s_port_t;
 use esp_idf_sys::*;
 
 crate::embedded_hal_error!(
@@ -23,20 +21,25 @@ crate::embedded_hal_error!(
     embedded_hal::spi::ErrorKind
 );
 
-/// I2S configuration
-/*pub mod config {
-
+pub mod config {
     /// I2S configuration
-    #[derive(Copy, Clone)]
-    pub struct Config {
-
-        vsync_invert: bool,
-
+    #[derive(Copy, Clone, Default)]
+    pub struct Config<'a> {
+        pub dma_buffer: Option<&'a [u8]>,
+        pub vsync_invert: bool,
+        pub vsync_isr: esp_idf_sys::gpio_isr_t,
+        pub dma_isr: esp_idf_sys::intr_handler_t,
     }
 
-    impl Config {
+    impl Config<'_> {
         pub fn new() -> Self {
             Default::default()
+        }
+
+        #[must_use]
+        pub fn dma_buffer(mut self, dma_buffer: Option<&'static [u8]>) -> Self {
+            self.dma_buffer = dma_buffer;
+            self
         }
 
         #[must_use]
@@ -46,23 +49,18 @@ crate::embedded_hal_error!(
         }
 
         #[must_use]
-        pub fn dma_half_buffer_size(mut self, size: u32) -> Self {
-            self.dma_half_buffer_size = size;
+        pub fn vsync_isr(mut self, vsync_isr: esp_idf_sys::gpio_isr_t) -> Self {
+            self.vsync_isr = vsync_isr;
+            self
+        }
+
+        #[must_use]
+        pub fn dma_isr(mut self, dma_isr: esp_idf_sys::intr_handler_t) -> Self {
+            self.dma_isr = dma_isr;
             self
         }
     }
-
-    impl Default for Config {
-        fn default() -> Self {
-            Self {
-                dma_half_buffer_size: 0,
-                dma: [],
-                vsync_invert: false,
-                //data_mode: embedded_hal::spi::MODE_0,
-            }
-        }
-    }
-}*/
+}
 
 pub mod regs {
     use core::ptr::{read_volatile, write_volatile};
@@ -254,11 +252,10 @@ pub struct CameraDriver<'d> {
     // intr_handle_t cam_intr_handle;
     //
     vsync_pin: i32, // was uin8_t
-    vsync_invert: bool,
 
     _swap_data: bool,
 
-    //config: config::Config,
+    config: config::Config<'d>,
     _p: PhantomData<&'d mut ()>,
 }
 
@@ -282,7 +279,7 @@ impl<'d> CameraDriver<'d> {
         sd5: impl Peripheral<P = impl InputPin> + 'd,
         sd6: impl Peripheral<P = impl InputPin> + 'd,
         sd7: impl Peripheral<P = impl InputPin> + 'd,
-        //config: config::Config,
+        config: config::Config<'d>,
     ) -> Result<Self, EspError> {
         let port = <I2S0 as I2s>::port();
         crate::into_ref!(pclk, vsync, href, sd0, sd1, sd2, sd3, sd4, sd5, sd6, sd7);
@@ -292,15 +289,15 @@ impl<'d> CameraDriver<'d> {
             dma_half_buffer_size: 0,
             _dma: Default::default(), //Vec::with_capacity(0),
             vsync_pin: vsync.pin(),
-            vsync_invert: true,
             _swap_data: false,
+            config, // todo: cleanup struct with config values
             _p: PhantomData,
         };
 
         // vsync INT
         /* ll_cam_set_pin */
         let io_conf = gpio_config_t {
-            intr_type: if result.vsync_invert {
+            intr_type: if result.config.vsync_invert {
                 GPIO_INT_TYPE_GPIO_PIN_INTR_NEGEDGE
             } else {
                 GPIO_INT_TYPE_GPIO_PIN_INTR_POSEDGE
@@ -312,32 +309,30 @@ impl<'d> CameraDriver<'d> {
         };
         esp!(unsafe {
             gpio_config(&io_conf);
-            gpio_install_isr_service(
-                (ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM)
-                    .try_into()
-                    .unwrap(),
-            );
+            gpio_install_isr_service((ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM) as i32);
             gpio_isr_handler_add(
                 vsync.pin(),
-                Some(Self::cam_vsync_isr),
-                /*0 as *mut c_void*/ core::ptr::null_mut::<c_void>(),
+                Some(result.config.vsync_isr.expect("Missing vsync isr handler.")),
+                /*0 as *mut c_void*/
+                core::ptr::null_mut::<c_void>(),
+                //core::ptr::addr_of_mut!(&result) as *mut c_void,
             ); // todo: correct parameter
             gpio_intr_disable(vsync.pin())
         })?;
 
         unsafe {
             // I2S0 special functions
-            gpio_matrix_in(pclk.pin().try_into().unwrap(), I2S0I_WS_IN_IDX, false);
-            gpio_matrix_in(vsync.pin().try_into().unwrap(), I2S0I_V_SYNC_IDX, false);
-            gpio_matrix_in(href.pin().try_into().unwrap(), I2S0I_H_SYNC_IDX, false);
-            gpio_matrix_in(sd0.pin().try_into().unwrap(), I2S0I_DATA_IN0_IDX, false);
-            gpio_matrix_in(sd1.pin().try_into().unwrap(), I2S0I_DATA_IN1_IDX, false);
-            gpio_matrix_in(sd2.pin().try_into().unwrap(), I2S0I_DATA_IN2_IDX, false);
-            gpio_matrix_in(sd3.pin().try_into().unwrap(), I2S0I_DATA_IN3_IDX, false);
-            gpio_matrix_in(sd4.pin().try_into().unwrap(), I2S0I_DATA_IN4_IDX, false);
-            gpio_matrix_in(sd5.pin().try_into().unwrap(), I2S0I_DATA_IN5_IDX, false);
-            gpio_matrix_in(sd6.pin().try_into().unwrap(), I2S0I_DATA_IN6_IDX, false);
-            gpio_matrix_in(sd7.pin().try_into().unwrap(), I2S0I_DATA_IN7_IDX, false);
+            gpio_matrix_in(pclk.pin() as u32, I2S0I_WS_IN_IDX, false);
+            gpio_matrix_in(vsync.pin() as u32, I2S0I_V_SYNC_IDX, false);
+            gpio_matrix_in(href.pin() as u32, I2S0I_H_SYNC_IDX, false);
+            gpio_matrix_in(sd0.pin() as u32, I2S0I_DATA_IN0_IDX, false);
+            gpio_matrix_in(sd1.pin() as u32, I2S0I_DATA_IN1_IDX, false);
+            gpio_matrix_in(sd2.pin() as u32, I2S0I_DATA_IN2_IDX, false);
+            gpio_matrix_in(sd3.pin() as u32, I2S0I_DATA_IN3_IDX, false);
+            gpio_matrix_in(sd4.pin() as u32, I2S0I_DATA_IN4_IDX, false);
+            gpio_matrix_in(sd5.pin() as u32, I2S0I_DATA_IN5_IDX, false);
+            gpio_matrix_in(sd6.pin() as u32, I2S0I_DATA_IN6_IDX, false);
+            gpio_matrix_in(sd7.pin() as u32, I2S0I_DATA_IN7_IDX, false);
             gpio_matrix_in(0x38, I2S0I_H_ENABLE_IDX, false); // What does this do?
 
             /* ll_cam_config */
@@ -458,53 +453,12 @@ impl<'d> CameraDriver<'d> {
         };
     }
 
-    /* --- ISR Handler --- */
-
-    #[allow(unreachable_code, unused)]
-    unsafe extern "C" fn cam_vsync_isr(_cam_driver: *mut c_void) {
-        // static IRAM_ATTR ?!
-        !unimplemented!()
-        /*
-           //DBG_PIN_SET(1);
-           cam_obj_t *cam = (cam_obj_t *)arg;
-           BaseType_t HPTaskAwoken = pdFALSE;
-           // filter
-           ets_delay_us(1);
-           if (gpio_ll_get_level(&GPIO, cam->vsync_pin) == !cam->vsync_invert) {
-               ll_cam_send_event(cam, CAM_VSYNC_EVENT, &HPTaskAwoken);
-               if (HPTaskAwoken == pdTRUE) {
-                   portYIELD_FROM_ISR();
-               }
-           }
-           //DBG_PIN_SET(0);
-
-        */
-    }
-
-    #[allow(unreachable_code, unused)]
-    unsafe extern "C" fn cam_dma_isr(_cam_driver: *mut c_void) {
-        !unimplemented!()
-        /*
-           //DBG_PIN_SET(1);
-           cam_obj_t *cam = (cam_obj_t *)arg;
-           BaseType_t HPTaskAwoken = pdFALSE;
-
-           typeof(I2S0.int_st) status = I2S0.int_st;
-           if (status.val == 0) {
-               return;
-           }
-
-           I2S0.int_clr.val = status.val;
-
-           if (status.in_suc_eof) {
-               ll_cam_send_event(cam, CAM_IN_SUC_EOF_EVENT, &HPTaskAwoken);
-           }
-           if (HPTaskAwoken == pdTRUE) {
-               portYIELD_FROM_ISR();
-           }
-           //DBG_PIN_SET(0);
-
-        */
+    pub fn cam_init_dma_isr(&self) -> Result<(), EspError> {
+        esp! {
+            unsafe{
+                esp_intr_alloc(ETS_I2S0_INTR_SOURCE as i32, (ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM) as i32, self.config.dma_isr, /*cam*/ core::ptr::null_mut::<c_void>(), core::ptr::null_mut::<*mut esp_idf_sys::intr_handle_data_t>() /*&cam->cam_intr_handle*/)
+            }
+        }
     }
 
     /* --- non instance functions --- */
