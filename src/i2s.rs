@@ -21,6 +21,10 @@ crate::embedded_hal_error!(
     embedded_hal::spi::ErrorKind
 );
 
+// definition missing in esp_idf_sys for esp32s2
+#[cfg(esp32s2)]
+static ETS_I2S0_INTR_SOURCE: u8 = 35;
+
 pub mod config {
     /// I2S configuration
     #[derive(Copy, Clone, Default)]
