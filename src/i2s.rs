@@ -236,6 +236,8 @@ pub enum SamplingMode {
     SM_0A00_0B00 = 3,
 }
 
+type DmaFilter = fn(dst: &mut u8, src: &mut u8, len: usize) -> usize; // todo: how to describe arrays here?
+
 /// I2S camera slave abstraction
 pub struct CameraDriver<'d> {
     i2s: i2s_port_t,
@@ -258,6 +260,8 @@ pub struct CameraDriver<'d> {
     vsync_pin: i32, // was uin8_t
 
     _swap_data: bool,
+
+    dma_filter: Option<DmaFilter>,
 
     config: config::Config<'d>,
     _p: PhantomData<&'d mut ()>,
@@ -294,6 +298,7 @@ impl<'d> CameraDriver<'d> {
             _dma: Default::default(), //Vec::with_capacity(0),
             vsync_pin: vsync.pin(),
             _swap_data: false,
+            dma_filter: None,
             config, // todo: cleanup struct with config values
             _p: PhantomData,
         };
@@ -474,6 +479,17 @@ impl<'d> CameraDriver<'d> {
             SamplingMode::SM_0A0B_0C0D => 2,
         }
     }
+
+    /*
+
+        size_t IRAM_ATTR ll_cam_memcpy(cam_obj_t *cam, uint8_t *out, const uint8_t *in, size_t len)
+        {
+        //DBG_PIN_SET(1);
+        size_t r = dma_filter(out, in, len);
+        //DBG_PIN_SET(0);
+        return r;
+        }
+    */
 
     /* --- DMA --- */
     /* TODO: add dma data transfer */
