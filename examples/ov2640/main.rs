@@ -8,7 +8,40 @@ pub mod camera {
     use esp_idf_hal::peripheral::Peripheral;
     use esp_idf_hal::prelude::*;
 
+    use crate::camera::PixFormat::PixformatJpeg;
     use esp_idf_sys::EspError;
+
+    // sensor.h ------------------------------------------------
+
+    pub enum CameraPid {
+        Ov9650Pid = 0x96,
+        Ov7725Pid = 0x77,
+        Ov2640Pid = 0x26,
+        Ov3660Pid = 0x3660,
+        Ov5640Pid = 0x5640,
+        Ov7670Pid = 0x76,
+        Nt99141Pid = 0x1410,
+        Gc2145Pid = 0x2145,
+        Gc032aPid = 0x232a,
+        Gc0308Pid = 0x9b,
+        Bf3005Pid = 0x30,
+        Bf20a6Pid = 0x20a6,
+        Sc101iotPid = 0xda4a,
+        Sc030iotPid = 0x9a46,
+        Sc031gsPid = 0x0031,
+    }
+
+    pub enum PixFormat {
+        PixformatRgb565,    // 2BPP/RGB565
+        PixformatYuv422,    // 2BPP/YUV422
+        PixformatYuv420,    // 1.5BPP/YUV420
+        PixformatGrayscale, // 1BPP/GRAYSCALE
+        PixformatJpeg,      // JPEG/COMPRESSED
+        PixformatRgb888,    // 3BPP/RGB888
+        PixformatRaw,       // RAW
+        PixformatRgb444,    // 3BP2P/RGB444
+        PixformatRgb555,    // 3BP2P/RGB555
+    }
 
     pub enum FrameSize {
         Framesize96x96,   // 96x96
@@ -37,6 +70,11 @@ pub mod camera {
         FramesizeQsxga, // 2560x1920
         FramesizeInvalid,
     }
+
+    // sensor.h ------------------------------------------------
+
+    static LCD_CAM_DMA_NODE_BUFFER_MAX_SIZE: u32 = 4092;
+    static CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX: u32 = 4092;
 
     // This needs to be abstracted for the usage with the driver
     pub struct Camera {
@@ -133,7 +171,7 @@ pub mod camera {
 
         // SCCB_Probe
         /*
-        OV2640_PID = 0x26,
+        Ov2640Pid = 0x26,
         OV2640_SCCB_ADDR   = 0x30
         */
         let slave_addr = 0x30;
@@ -208,24 +246,25 @@ pub mod camera {
     }
 
     pub fn calc_rgb_dma(cam: &mut Camera) -> bool {
-        let dma_half_buffer_max = CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX / 2 / cam.dma_bytes_per_item;
+        let dma_half_buffer_max: u32 =
+            (CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX / 2 / cam.dma_bytes_per_item) as u32;
         let dma_buffer_max = 2 * dma_half_buffer_max;
-        let node_max = LCD_CAM_DMA_NODE_BUFFER_MAX_SIZE / cam.dma_bytes_per_item;
+        let node_max: u32 = (LCD_CAM_DMA_NODE_BUFFER_MAX_SIZE / cam.dma_bytes_per_item) as u32;
 
-        let line_width = cam.width * cam.in_bytes_per_pixel;
-        let image_size = cam.height * line_width;
+        let line_width: u32 = (cam.width * cam.in_bytes_per_pixel as u16) as u32;
+        let image_size: u32 = (cam.height as u32 * line_width) as u32;
         if image_size > (4 * 1024 * 1024) || (line_width > dma_half_buffer_max) {
-            ESP_LOGE(TAG, "Resolution too high");
+            //ESP_LOGE(TAG, "Resolution too high");
             return false;
         }
 
-        let node_size = node_max;
+        let mut node_size = node_max;
         let mut nodes_per_line = 1;
         let mut lines_per_node = 1;
         let mut lines_per_half_buffer = 1;
-        let dma_half_buffer_min = node_max;
-        let dma_half_buffer = dma_half_buffer_max;
-        let dma_buffer_size = dma_buffer_max;
+        let mut dma_half_buffer_min = node_max;
+        let mut dma_half_buffer = dma_half_buffer_max;
+        let mut dma_buffer_size = dma_buffer_max;
 
         // Calculate DMA Node Size so that it's dividable by or divisor of the line width
         if line_width >= node_max {
@@ -243,7 +282,7 @@ pub mod camera {
                 if (i % line_width) == 0 {
                     node_size = i;
                     lines_per_node = node_size / line_width;
-                    while (cam.height % lines_per_node) != 0 {
+                    while (cam.height % lines_per_node as u16) != 0 {
                         lines_per_node = lines_per_node - 1;
                         node_size = lines_per_node * line_width;
                     }
@@ -257,27 +296,27 @@ pub mod camera {
         dma_half_buffer = (dma_half_buffer_max / dma_half_buffer_min) * dma_half_buffer_min;
         // Adjust EOF size so that height will be divisable by the number of lines in each EOF
         lines_per_half_buffer = dma_half_buffer / line_width;
-        while (cam.height % lines_per_half_buffer) != 0 {
+        while (cam.height % lines_per_half_buffer as u16) != 0 {
             dma_half_buffer = dma_half_buffer - dma_half_buffer_min;
             lines_per_half_buffer = dma_half_buffer / line_width;
         }
         // Calculate DMA size
         dma_buffer_size = (dma_buffer_max / dma_half_buffer) * dma_half_buffer;
 
-        ESP_LOGI(TAG, "node_size: %4u, nodes_per_line: %u, lines_per_node: %u, dma_half_buffer_min: %5u, dma_half_buffer: %5u, lines_per_half_buffer: %2u, dma_buffer_size: %5u, image_size: %u",
-                 node_size * cam.dma_bytes_per_item, nodes_per_line, lines_per_node,
-                 dma_half_buffer_min * cam.dma_bytes_per_item, dma_half_buffer * cam.dma_bytes_per_item,
-                 lines_per_half_buffer, dma_buffer_size * cam.dma_bytes_per_item, image_size);
+        //        ESP_LOGI(TAG, "node_size: %4u, nodes_per_line: %u, lines_per_node: %u, dma_half_buffer_min: %5u, dma_half_buffer: %5u, lines_per_half_buffer: %2u, dma_buffer_size: %5u, image_size: %u",
+        //                 node_size * cam.dma_bytes_per_item, nodes_per_line, lines_per_node,
+        //                 dma_half_buffer_min * cam.dma_bytes_per_item, dma_half_buffer * cam.dma_bytes_per_item,
+        //                 lines_per_half_buffer, dma_buffer_size * cam.dma_bytes_per_item, image_size);
 
-        cam.dma_buffer_size = dma_buffer_size * cam.dma_bytes_per_item;
-        cam.dma_half_buffer_size = dma_half_buffer * cam.dma_bytes_per_item;
-        cam.dma_node_buffer_size = node_size * cam.dma_bytes_per_item;
+        cam.dma_buffer_size = (dma_buffer_size * cam.dma_bytes_per_item) as u32;
+        cam.dma_half_buffer_size = (dma_half_buffer * cam.dma_bytes_per_item) as u32;
+        cam.dma_node_buffer_size = (node_size * cam.dma_bytes_per_item) as u32;
         cam.dma_half_buffer_cnt = cam.dma_buffer_size / cam.dma_half_buffer_size;
         return true;
     }
 
     fn dma_sizes(cam: &mut Camera) -> bool {
-        cam.dma_bytes_per_item = i2s::CameraDriver::bytes_per_sample(sampling_mode); // todo: get from camera driver
+        //cam.dma_bytes_per_item = i2s::CameraDriver::bytes_per_sample(sampling_mode); // todo: get from camera driver
         if cam.jpeg_mode {
             cam.dma_half_buffer_cnt = 8;
             cam.dma_node_buffer_size = 2048;
@@ -288,17 +327,32 @@ pub mod camera {
         }
         return true;
     }
+
+    /*    fn ll_cam_dma_filter_jpeg(dst: &mut [u8], src: &[u8], len: usize) -> usize {
+            let dma_el: &i2s::DmaElement = src;
+            let elements = len / core::mem::size_of::<i2s::DmaElement>();
+            let end = (elements / 4) * 4;
+            // manually unrolling 4 iterations of the loop here
+            for i in (0..end).step_by(4) {
+                dst[i + 0] = dma_el[i + 0].sample1;
+                dst[i + 1] = dma_el[i + 1].sample1;
+                dst[i + 2] = dma_el[i + 2].sample1;
+                dst[i + 3] = dma_el[i + 3].sample1;
+            }
+            elements
+        }
+    */
     fn set_sample_mode(
         cam: &mut Camera,
         pix_format: PixFormat,
         xclk_freq_hz: u32,
         sensor_pid: u16,
-    ) -> EspError {
-        if pix_format == PIXFORMAT_GRAYSCALE {
-            if sensor_pid == OV3660_PID
-                || sensor_pid == OV5640_PID
-                || sensor_pid == NT99141_PID
-                || sensor_pid == SC031GS_PID
+    ) -> Result<i2s::SamplingMode, EspError> {
+        /*        if pix_format == PixformatGrayscale {
+            if sensor_pid == Ov3660Pid
+                || sensor_pid == Ov5640Pid
+                || sensor_pid == Nt99141Pid
+                || sensor_pid == Sc031gsPid
             {
                 if xclk_freq_hz > 10000000 {
                     sampling_mode = i2s::SamplingMode::SM_0A00_0B00;
@@ -309,7 +363,7 @@ pub mod camera {
                 }
                 cam.in_bytes_per_pixel = 1; // camera sends Y8
             } else {
-                if xclk_freq_hz > 10000000 && sensor_pid != OV7725_PID {
+                if xclk_freq_hz > 10000000 && sensor_pid != Ov7725Pid {
                     sampling_mode = i2s::SamplingMode::SM_0A00_0B00;
                     dma_filter = ll_cam_dma_filter_grayscale_highspeed;
                 } else {
@@ -318,10 +372,10 @@ pub mod camera {
                 }
                 cam.in_bytes_per_pixel = 2; // camera sends YU/YV
             }
-            self.fb_bytes_per_pixel = 1; // frame buffer stores Y8
-        } else if pix_format == PIXFORMAT_YUV422 || pix_format == PIXFORMAT_RGB565 {
-            if xclk_freq_hz > 10000000 && sensor_pid != OV7725_PID {
-                if sensor_pid == OV7670_PID {
+            cam.fb_bytes_per_pixel = 1; // frame buffer stores Y8
+        } else if pix_format == PixformatYuv422 || pix_format == PixformatRgb565 {
+            if xclk_freq_hz > 10000000 && sensor_pid != Ov7725Pid {
+                if sensor_pid == Ov7670Pid {
                     sampling_mode = i2s::SamplingMode::SM_0A0B_0B0C;
                 } else {
                     sampling_mode = i2s::SamplingMode::SM_0A00_0B00;
@@ -333,17 +387,21 @@ pub mod camera {
             }
             cam.in_bytes_per_pixel = 2; // camera sends YU/YV
             cam.fb_bytes_per_pixel = 2; // frame buffer stores YU/YV/RGB565
-        } else if pix_format == PIXFORMAT_JPEG {
-            cam.in_bytes_per_pixel = 1;
-            cam.fb_bytes_per_pixel = 1;
-            dma_filter = ll_cam_dma_filter_jpeg;
-            sampling_mode = i2s::SamplingMode::SM_0A00_0B00;
-        } else {
-            ESP_LOGE(TAG, "Requested format is not supported");
-            return ESP_ERR_NOT_SUPPORTED;
+        } else*/
+        match pix_format {
+            PixformatJpeg => {
+                cam.in_bytes_per_pixel = 1;
+                cam.fb_bytes_per_pixel = 1;
+                //dma_filter = ll_cam_dma_filter_jpeg;
+                //sampling_mode = i2s::SamplingMode::SM_0A00_0B00;
+            }
+            _ => {
+                //ESP_LOGE(TAG, "Requested format is not supported");
+                //return Err(ESP_ERR_NOT_SUPPORTED);
+            }
         }
         //I2S0.fifo_conf.rx_fifo_mod = sampling_mode; // TODO: correct reg access / set sampling mode
-        return ESP_OK;
+        Ok(i2s::SamplingMode::SM_0A00_0B00)
     }
 }
 
@@ -415,7 +473,7 @@ fn run() {
 
        // SCCB_Probe
        / *
-       OV2640_PID = 0x26,
+       Ov2640Pid = 0x26,
        OV2640_SCCB_ADDR   = 0x30
        * /
        let slave_addr = 0x30;
