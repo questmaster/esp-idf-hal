@@ -207,7 +207,7 @@ pub mod regs {
 }
 
 //struct DmaSample {
-struct DmaElement {
+pub struct DmaElement {
     _sample2: u8,
     _unused2: u8,
     _sample1: u8,
@@ -236,6 +236,9 @@ pub enum SamplingMode {
     SM_0A00_0B00 = 3,
 }
 
+/// DmaFilter functions need to be placed in IRAM! (same as ISRs)
+type DmaFilter = fn(dst: &mut [u8], src: &[u8], len: usize) -> usize; // todo: how to describe arrays here?
+
 /// I2S camera slave abstraction
 pub struct CameraDriver<'d> {
     i2s: i2s_port_t,
@@ -258,6 +261,8 @@ pub struct CameraDriver<'d> {
     vsync_pin: i32, // was uin8_t
 
     _swap_data: bool,
+
+    dma_filter: Option<DmaFilter>,
 
     config: config::Config<'d>,
     _p: PhantomData<&'d mut ()>,
@@ -294,6 +299,7 @@ impl<'d> CameraDriver<'d> {
             _dma: Default::default(), //Vec::with_capacity(0),
             vsync_pin: vsync.pin(),
             _swap_data: false,
+            dma_filter: None,
             config, // todo: cleanup struct with config values
             _p: PhantomData,
         };
@@ -414,6 +420,7 @@ impl<'d> CameraDriver<'d> {
     ///
     /// Disables I2S0 as camera slave and disables ISRs and DMA.
     ///
+    #[link_section = ".iram1"] /* IRAM_ATTR */
     pub fn stop(&self) -> bool {
         let port = <I2S0 as I2s>::port();
 
@@ -428,9 +435,18 @@ impl<'d> CameraDriver<'d> {
         true
     }
 
-    #[allow(unreachable_code)]
-    pub fn set_sampling_mode(&self, _sampling_mode: SamplingMode) {
-        !unimplemented!()
+    pub fn set_sampling_mode(&mut self, sampling_mode: SamplingMode) {
+        let port = <I2S0 as I2s>::port();
+        let fifo_conf = regs::Register::new(port, regs::I2sRegisterBank::I2S_FIFO_CONF_REG);
+
+        self.sampling_mode = sampling_mode;
+
+        let coded_sampling_mode = (sampling_mode as u32) << 16_u8; // move value to bit 16 position
+        fifo_conf.write_masked(coded_sampling_mode, 0x0007_0000);
+    }
+
+    pub fn get_sampling_mode(&self) -> SamplingMode {
+        self.sampling_mode
     }
 
     pub fn vsync_interrupt_enable(&self, enable: bool) {
@@ -477,6 +493,14 @@ impl<'d> CameraDriver<'d> {
 
     /* --- DMA --- */
     /* TODO: add dma data transfer */
+
+    #[link_section = ".iram1"] /* IRAM_ATTR */
+    pub fn dma_memcpy(&self, output: &mut [u8], input: &[u8], len: usize) -> usize {
+        //DBG_PIN_SET(1);
+        let dma_filter = self.dma_filter.expect("No DMA filter function set");
+        dma_filter(output, input, len)
+        //DBG_PIN_SET(0);
+    }
 }
 
 impl<'d> Drop for CameraDriver<'d> {
