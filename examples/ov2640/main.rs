@@ -3,7 +3,9 @@ pub mod cam_hal;
 pub mod ll_cam;
 pub mod sensor;
 
+#[cfg(all(esp32, esp_idf_version_major = "4"))]
 use crate::cam::*;
+use crate::sensor::{FrameSize, PixFormat};
 
 #[cfg(all(esp32, esp_idf_version_major = "4"))]
 fn run() {
@@ -38,7 +40,7 @@ fn run() {
     let sd6 = pins.gpio36;
     let sd7 = pins.gpio39;
 
-    let cam_slave = setup(
+    let cam_slave = EspCamera::init(
         sda.into(),
         scl.into(),
         i2c,
@@ -58,51 +60,14 @@ fn run() {
         sd5.into(),
         sd6.into(),
         sd7.into(),
+        Hertz::from(16.MHz()),
+        PixFormat::PixformatJpeg,
+        FrameSize::FramesizeVga,
+        50,
+        1,
     )
     .unwrap();
 
-    /* done by setup above
-
-       println!("Starting I2C SSD1306 test");
-
-       let config = <i2c::config::MasterConfig as Default>::default().baudrate(8.kHz().into());
-       let mut i2c0 = i2c::Master::<i2c::I2C1, _, _>::new(i2c, i2c::MasterPins { sda, scl }, config)
-           .expect("i2c1 init failed");
-       let mut pwdn = pwdn.into_output()?;
-       pwdn.set_low()?; // power-up = low
-
-       // SCCB_Probe
-       / *
-       Ov2640Pid = 0x26,
-       OV2640_SCCB_ADDR   = 0x30
-       * /
-       let slave_addr = 0x30;
-       let ov2640_pid: u8 = 0x26;
-       let buffer: &mut [u8; 2] = &mut [0_u8, 0_u8];
-       let byte1: &mut [u8; 1] = &mut [0_u8];
-       let byte2: &mut [u8; 1] = &mut [0_u8];
-
-       let i2c_res1 = i2c0.write(slave_addr, &[0xff, 0x01]);
-       //        delay.delay_ms(10 as u32);
-       //        let i2c_res1 = i2c0.write(slave_addr, &[0x12, 0x80]);
-       //        println!("write -> {:#?}", i2c_res1);
-       //        delay.delay_ms(50 as u32);
-       let i2c_res = i2c0.write_read(slave_addr, &[0x0a], byte1);
-       let i2c_res = i2c0.write_read(slave_addr, &[0x0b], byte2);
-       println!(
-           "return command: {} {} -> {:#?}",
-           byte1[0], byte2[0], i2c_res
-       );
-
-       //SCCB_Write(slv_addr, 0xFF, 0x01);//bank sensor
-       //uint16_t PID = SCCB_Read(slv_addr, 0x0A);
-       if ov2640_pid == byte1[0] {
-           println!("OV2640 found");
-       } else {
-           println!("OV2640 mismatch");
-       }
-
-    */
     println!("After OV2640 connect");
 
     //cam_slave.config(i2s::FrameSize::FramesizeVga, 0x26); // TODO: move to camera; NOT driver
